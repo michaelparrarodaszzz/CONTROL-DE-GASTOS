@@ -1,9 +1,12 @@
-#uwu onichan
-import sqlite3, hashlib, re, datetime
+
+
+import os, re, hashlib, sqlite3, datetime
 import tkinter as tk
 from tkinter import ttk, messagebox
 
-DB_PATH = "gestiondegastos.db"
+# -------------------- Ruta robusta para la DB --------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "gestiondegastos.db")
 
 # -------------------- Conexión --------------------
 def conexion_bd() -> sqlite3.Connection:
@@ -12,6 +15,7 @@ def conexion_bd() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn
 
+# -------------------- Helpers --------------------
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 def hash_pw(pw: str) -> str:
@@ -47,7 +51,7 @@ def id_from_combo(texto: str):
     except Exception:
         return None
 
-# -------------------- Base CRUD --------------------
+# -------------------- Base CRUD (con wrapper seguro) --------------------
 class BaseCRUD(ttk.Frame):
     def __init__(self, master):
         super().__init__(master, padding=10)
@@ -58,13 +62,21 @@ class BaseCRUD(ttk.Frame):
         self.configurar_columnas()
         self.cargar_tabla()
 
+    # Wrapper para que cualquier excepción en botones se muestre en pantalla
+    def _call(self, fn):
+        try:
+            fn()
+        except Exception as e:
+            import traceback
+            messagebox.showerror("Error en acción", f"{e}\n\n{traceback.format_exc()}")
+
     def _build_layout(self):
         # Buscador
         top = ttk.Frame(self); top.pack(fill="x")
         ttk.Label(top, text="Buscar:").pack(side="left")
         self.ent_buscar = ttk.Entry(top, width=30); self.ent_buscar.pack(side="left", padx=6)
-        ttk.Button(top, text="Buscar", command=self.buscar).pack(side="left")
-        ttk.Button(top, text="Limpiar", command=self.limpiar_busqueda).pack(side="left", padx=(6,0))
+        ttk.Button(top, text="Buscar", command=lambda: self._call(self.buscar)).pack(side="left")
+        ttk.Button(top, text="Limpiar", command=lambda: self._call(self.limpiar_busqueda)).pack(side="left", padx=(6,0))
 
         # Tabla
         mid = ttk.Frame(self); mid.pack(fill="both", expand=True, pady=(8,8))
@@ -81,10 +93,10 @@ class BaseCRUD(ttk.Frame):
 
         # Botones
         btns = ttk.Frame(self); btns.pack(fill="x", pady=(8,0))
-        ttk.Button(btns, text="Nuevo", command=self.nuevo).pack(side="left")
-        ttk.Button(btns, text="Guardar", command=self.guardar).pack(side="left", padx=6)
-        ttk.Button(btns, text="Eliminar", command=self.eliminar).pack(side="left")
-        ttk.Button(btns, text="Refrescar", command=self.cargar_tabla).pack(side="right")
+        ttk.Button(btns, text="Nuevo",     command=lambda: self._call(self.nuevo)).pack(side="left")
+        ttk.Button(btns, text="Guardar",   command=lambda: self._call(self.guardar)).pack(side="left", padx=6)
+        ttk.Button(btns, text="Eliminar",  command=lambda: self._call(self.eliminar)).pack(side="left")
+        ttk.Button(btns, text="Refrescar", command=lambda: self._call(lambda: self.cargar_tabla())).pack(side="right")
 
     # Hooks para sobrescribir
     def configurar_columnas(self): ...
@@ -94,6 +106,7 @@ class BaseCRUD(ttk.Frame):
     def nuevo(self): ...
     def guardar(self): ...
     def eliminar(self): ...
+
     # Comunes
     def buscar(self): self.cargar_tabla(self.ent_buscar.get().strip())
     def limpiar_busqueda(self):
@@ -131,7 +144,8 @@ class UsuariosFrame(BaseCRUD):
         self.ent_pwd2.grid(row=4, column=1, sticky="w", pady=3)
 
         self.var_mostrar = tk.BooleanVar(value=False)
-        ttk.Checkbutton(f, text="Mostrar contraseñas", variable=self.var_mostrar, command=self._toggle_pw).grid(row=5, column=1, sticky="w")
+        ttk.Checkbutton(f, text="Mostrar contraseñas", variable=self.var_mostrar,
+                        command=lambda: self._toggle_pw()).grid(row=5, column=1, sticky="w")
 
         f.grid_columnconfigure(1, weight=1)
 
@@ -278,8 +292,12 @@ class CuentasFrame(BaseCRUD):
                                     FROM cuentas cu JOIN usuarios u ON u.id=cu.id_usuario
                                     ORDER BY cu.id DESC""").fetchall()
         for r in rows:
+            try:
+                saldo_fmt = f"{float(r['saldo']):.2f}"
+            except Exception:
+                saldo_fmt = str(r["saldo"])
             self.tree.insert("", "end", values=(r["id"], r["usuario"], r["nombre"], r["tipo"], r["moneda"],
-                                                f"{r['saldo']:.2f}", r["estado"], r["fecha"]))
+                                                saldo_fmt, r["estado"], r["fecha"]))
 
     def on_select(self, _evt):
         sel = self.tree.selection()
@@ -455,7 +473,7 @@ class CategoriasFrame(BaseCRUD):
             messagebox.showerror("Error", f"No se pudo eliminar: {e}")
         self.cargar_tabla(); self.nuevo()
 
-# -------------------- Transacciones --------------------
+# -------------------- Transacciones (arreglado) --------------------
 class TransaccionesFrame(BaseCRUD):
     def configurar_columnas(self):
         cols = [
@@ -505,7 +523,7 @@ class TransaccionesFrame(BaseCRUD):
 
         f.grid_columnconfigure(1, weight=1)
 
-        # 👇 Cargar usuarios DESPUÉS de crear cuenta/categoría
+        # Cargar usuarios DESPUÉS de crear cuenta/categoría
         self._cargar_usuarios_combo(cargar_dependientes=True)
 
     def _cargar_usuarios_combo(self, cargar_dependientes: bool = False):
@@ -513,12 +531,12 @@ class TransaccionesFrame(BaseCRUD):
         self.cbo_user["values"] = [f"{r['id']} - {r['email']}" for r in items]
         if items:
             self.cbo_user.current(0)
-        # Solo recargar dependientes si los combos YA existen y nos lo piden
+        # Solo recargar dependientes si ya existen los combos
         if cargar_dependientes and hasattr(self, "cbo_cuenta") and hasattr(self, "cbo_categoria"):
             self._recargar_dependientes()
 
     def _recargar_dependientes(self):
-        # Baranda extra por si se llama antes de tiempo
+        # Baranda: si se llama antes de tiempo, salir sin romper
         if not hasattr(self, "cbo_cuenta") or not hasattr(self, "cbo_categoria"):
             return
         uid = id_from_combo(self.var_user.get())
@@ -533,6 +551,35 @@ class TransaccionesFrame(BaseCRUD):
         cats = lista_categorias(uid)
         self.cbo_categoria["values"] = [f"{r['id']} - {r['nombre']}" for r in cats]
         if cats: self.cbo_categoria.current(0)
+
+    def cargar_tabla(self, filtro: str = ""):
+        for it in self.tree.get_children(): self.tree.delete(it)
+        with conexion_bd() as c:
+            if filtro:
+                like = f"%{filtro}%"
+                rows = c.execute("""SELECT t.id, u.email AS usuario, cu.nombre AS cuenta, ca.nombre AS categoria,
+                                           t.monto, t.fecha, t.descripcion
+                                    FROM transacciones t
+                                    JOIN usuarios u ON u.id=t.id_usuario
+                                    JOIN cuentas cu ON cu.id=t.cuenta_id
+                                    JOIN categorias ca ON ca.id=t.categoria_id
+                                    WHERE u.email LIKE ? OR cu.nombre LIKE ? OR ca.nombre LIKE ? OR IFNULL(t.descripcion,'') LIKE ?
+                                    ORDER BY t.id DESC""", (like, like, like, like)).fetchall()
+            else:
+                rows = c.execute("""SELECT t.id, u.email AS usuario, cu.nombre AS cuenta, ca.nombre AS categoria,
+                                           t.monto, t.fecha, t.descripcion
+                                    FROM transacciones t
+                                    JOIN usuarios u ON u.id=t.id_usuario
+                                    JOIN cuentas cu ON cu.id=t.cuenta_id
+                                    JOIN categorias ca ON ca.id=t.categoria_id
+                                    ORDER BY t.id DESC""").fetchall()
+        for r in rows:
+            try:
+                monto_fmt = f"{float(r['monto']):.2f}"
+            except Exception:
+                monto_fmt = str(r["monto"])
+            self.tree.insert("", "end", values=(r["id"], r["usuario"], r["cuenta"], r["categoria"],
+                                                monto_fmt, r["fecha"], r["descripcion"] or ""))
 
     def on_select(self, _evt):
         sel = self.tree.selection()
@@ -554,11 +601,59 @@ class TransaccionesFrame(BaseCRUD):
             self.var_fecha.set(r["fecha"])
             self.var_desc.set(r["descripcion"] or "")
 
+    def nuevo(self):
+        self.selected_id = None
+        self.var_id.set("")
+        self._cargar_usuarios_combo()
+        self.var_monto.set("")
+        self.var_fecha.set(str(datetime.date.today()))
+        self.var_desc.set("")
+
+    def guardar(self):
+        uid = id_from_combo(self.var_user.get())
+        cid = id_from_combo(self.var_categoria.get())
+        acc = id_from_combo(self.var_cuenta.get())
+        if not (uid and cid and acc):
+            messagebox.showwarning("Validación", "Selecciona Usuario, Cuenta y Categoría."); return
+        try:
+            monto = float(self.var_monto.get())
+        except:
+            messagebox.showwarning("Validación", "Monto inválido."); return
+        fecha = self.var_fecha.get().strip()
+        if not fecha_valida(fecha): messagebox.showwarning("Validación", "Fecha inválida."); return
+        desc = self.var_desc.get().strip() or None
+
+        try:
+            with conexion_bd() as c:
+                if self.selected_id is None:
+                    c.execute("""INSERT INTO transacciones(id_usuario,categoria_id,cuenta_id,monto,fecha,descripcion)
+                                 VALUES (?,?,?,?,?,?)""", (uid, cid, acc, monto, fecha, desc))
+                    messagebox.showinfo("OK", "Transacción creada.")
+                else:
+                    c.execute("""UPDATE transacciones SET id_usuario=?, categoria_id=?, cuenta_id=?, monto=?, fecha=?, descripcion=?
+                                 WHERE id=?""", (uid, cid, acc, monto, fecha, desc, self.selected_id))
+                    messagebox.showinfo("OK", "Transacción actualizada.")
+        except sqlite3.IntegrityError as e:
+            messagebox.showerror("Error", f"No se pudo guardar: {e}")
+        self.cargar_tabla(); self.nuevo()
+
+    def eliminar(self):
+        if not self.selected_id:
+            messagebox.showwarning("Eliminar", "Selecciona una transacción."); return
+        if not messagebox.askyesno("Confirmar", "¿Eliminar transacción?"): return
+        try:
+            with conexion_bd() as c:
+                c.execute("DELETE FROM transacciones WHERE id=?", (self.selected_id,))
+            messagebox.showinfo("OK", "Transacción eliminada.")
+        except sqlite3.IntegrityError as e:
+            messagebox.showerror("Error", f"No se pudo eliminar: {e}")
+        self.cargar_tabla(); self.nuevo()
+
 # -------------------- App --------------------
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Gestión de gastos — Tkinter + SQLite (simple)")
+        self.title("Gestión de gastos — Tkinter + SQLite")
         self.geometry("1120x720")
         self.minsize(980, 640)
         try: ttk.Style(self).configure("Treeview", rowheight=26)
@@ -572,4 +667,3 @@ class App(tk.Tk):
 
 if __name__ == "__main__":
     App().mainloop()
-
