@@ -11,7 +11,7 @@ Permitir a [público objetivo] registrar y consultar ingresos/gastos por cuentas
 ## Estructura
 - `gestiondegastos.db` (SQLite)
 - `python "disenos de formularios.py"` (UI)
-- `info.txt` (enlaces a GitHub y Trello)
+- `info.txt` (enlaces a GitHub)
 
 ## Cómo ejecutar
 ```bash
